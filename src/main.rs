@@ -13,8 +13,11 @@ const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const SCOPE: &str = "openid profile email offline_access";
 const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 
-const AUTH_PROFILES_PATH: &str =
-    "/home/pahud/.openclaw/agents/main/agent/auth-profiles.json";
+fn auth_profiles_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .expect("cannot determine home directory")
+        .join(".openclaw/agents/main/agent/auth-profiles.json")
+}
 
 // ── auth-profiles.json schema ────────────────────────────────────────────────
 
@@ -222,24 +225,24 @@ fn do_oauth_flow(client: &Client) -> anyhow::Result<OAuthResult> {
 // ── load / save auth-profiles.json ───────────────────────────────────────────
 
 fn load_profiles() -> AuthProfiles {
-    std::fs::read_to_string(AUTH_PROFILES_PATH)
+    std::fs::read_to_string(auth_profiles_path())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or(AuthProfiles { version: 1, ..Default::default() })
 }
 
 fn save_profiles(profiles: &AuthProfiles) -> anyhow::Result<()> {
-    let path = std::path::Path::new(AUTH_PROFILES_PATH);
+    let path = auth_profiles_path();
     let bak = path.with_extension("json.bak");
 
     // backup existing
     if path.exists() {
-        std::fs::copy(path, &bak)?;
+        std::fs::copy(&path, &bak)?;
         println!("Backed up to {}", bak.display());
     }
 
     let json = serde_json::to_string_pretty(profiles)?;
-    std::fs::write(path, json)?;
+    std::fs::write(&path, json)?;
     println!("Saved to {}", path.display());
     Ok(())
 }
