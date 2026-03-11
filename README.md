@@ -16,6 +16,18 @@ cargo build --release
 ./target/release/manytokens --openai
 ```
 
+Example session:
+
+```
+$ manytokens --openai
+
+Open this URL in your browser:
+
+https://auth.openai.com/oauth/authorize?response_type=code&client_id=<redacted...>
+
+Paste the callback URL (or authorization code):
+```
+
 Follow the prompts — open the URL, complete login in the browser, paste the callback URL back into the terminal. When done, answer `y` to add another account or press Enter to finish.
 
 ## Output
