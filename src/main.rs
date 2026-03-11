@@ -13,11 +13,7 @@ const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const SCOPE: &str = "openid profile email offline_access";
 const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 
-fn auth_profiles_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .expect("cannot determine home directory")
-        .join(".openclaw/agents/main/agent/auth-profiles.json")
-}
+
 
 // ── auth-profiles.json schema ────────────────────────────────────────────────
 
@@ -224,15 +220,14 @@ fn do_oauth_flow(client: &Client) -> anyhow::Result<OAuthResult> {
 
 // ── load / save auth-profiles.json ───────────────────────────────────────────
 
-fn load_profiles() -> AuthProfiles {
-    std::fs::read_to_string(auth_profiles_path())
+fn load_profiles(path: &std::path::Path) -> AuthProfiles {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or(AuthProfiles { version: 1, ..Default::default() })
 }
 
-fn save_profiles(profiles: &AuthProfiles) -> anyhow::Result<()> {
-    let path = auth_profiles_path();
+fn save_profiles(profiles: &AuthProfiles, path: &std::path::Path) -> anyhow::Result<()> {
     let bak = path.with_extension("json.bak");
 
     // backup existing
@@ -249,9 +244,9 @@ fn save_profiles(profiles: &AuthProfiles) -> anyhow::Result<()> {
 
 // ── main ──────────────────────────────────────────────────────────────────────
 
-fn openai_flow() -> anyhow::Result<()> {
+fn openai_flow(output: &std::path::Path) -> anyhow::Result<()> {
     let client = Client::new();
-    let mut profiles = load_profiles();
+    let mut profiles = load_profiles(output);
     let mut added = 0usize;
 
     loop {
@@ -294,7 +289,7 @@ fn openai_flow() -> anyhow::Result<()> {
     }
 
     if added > 0 {
-        save_profiles(&profiles)?;
+        save_profiles(&profiles, output)?;
         println!("\nDone. {} profile(s) added.", added);
     } else {
         println!("No profiles added.");
@@ -304,13 +299,18 @@ fn openai_flow() -> anyhow::Result<()> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let output = args.windows(2)
+        .find(|w| w[0] == "-o")
+        .map(|w| std::path::PathBuf::from(&w[1]))
+        .unwrap_or_else(|| std::path::PathBuf::from("auth-profiles.json"));
+
     if args.iter().any(|a| a == "--openai") {
-        if let Err(e) = openai_flow() {
+        if let Err(e) = openai_flow(&output) {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     } else {
-        eprintln!("Usage: manytokens --openai");
+        eprintln!("Usage: manytokens --openai [-o <output>]");
         std::process::exit(1);
     }
 }
