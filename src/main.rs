@@ -304,13 +304,21 @@ fn main() {
         .map(|w| std::path::PathBuf::from(&w[1]))
         .unwrap_or_else(|| std::path::PathBuf::from("auth-profiles.json"));
 
-    if args.iter().any(|a| a == "--openai") {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Usage: manytokens --openai [-o <output>]");
+        println!();
+        println!("Options:");
+        println!("  --openai        Authenticate via OpenAI OAuth (PKCE)");
+        println!("  -o <path>       Output path for auth-profiles.json [default: ./auth-profiles.json]");
+        println!("  -h, --help      Show this help message");
+    } else if args.iter().any(|a| a == "--openai") {
         if let Err(e) = openai_flow(&output) {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     } else {
         eprintln!("Usage: manytokens --openai [-o <output>]");
+        eprintln!("Run with --help for more information.");
         std::process::exit(1);
     }
 }
