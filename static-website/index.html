@@ -5,98 +5,89 @@
   <title>manytokens</title>
   <style>
     body { font-family: monospace; max-width: 640px; margin: 40px auto; padding: 0 16px; }
-    button { padding: 8px 16px; cursor: pointer; }
+    button { padding: 8px 16px; cursor: pointer; margin-right: 8px; }
     pre { background: #f4f4f4; padding: 12px; overflow-x: auto; }
     #status { margin: 16px 0; }
+    textarea { width: 100%; height: 60px; font-family: monospace; }
+    .step { margin: 16px 0; }
   </style>
 </head>
 <body>
   <h2>manytokens</h2>
   <p>Authenticate OpenAI accounts via OAuth (PKCE) and download <code>auth-profiles.json</code>.</p>
 
-  <button id="btn-login">Login with OpenAI</button>
+  <div class="step" id="step1">
+    <button id="btn-login">1. Open OpenAI Login</button>
+  </div>
+
+  <div class="step" id="step2" hidden>
+    <p>Complete login in the browser, then paste the full callback URL below:</p>
+    <textarea id="callback-input" placeholder="http://localhost:1455/auth/callback?code=..."></textarea><br><br>
+    <button id="btn-exchange">2. Exchange Token</button>
+  </div>
+
   <div id="status"></div>
   <pre id="output" hidden></pre>
-  <button id="btn-download" hidden>Download auth-profiles.json</button>
-  <button id="btn-add" hidden>Add another account</button>
+  <div class="step" id="step3" hidden>
+    <button id="btn-download">Download auth-profiles.json</button>
+    <button id="btn-add">Add another account</button>
+  </div>
 
   <script type="module">
-    const CLIENT_ID    = 'app_EMoamEEZ73f0CkXaXp7hrann';
+    const CLIENT_ID     = 'app_EMoamEEZ73f0CkXaXp7hrann';
     const AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
     const TOKEN_URL     = 'https://auth.openai.com/oauth/token';
-    const REDIRECT_URI  = location.origin + location.pathname;
+    const REDIRECT_URI  = 'http://localhost:1455/auth/callback';
     const SCOPE         = 'openid profile email offline_access';
 
     const $ = id => document.getElementById(id);
+    let pkceVerifier, oauthState;
+    let profiles = { version: 1, profiles: {}, lastGood: {}, usageStats: {} };
 
-    // ── PKCE ──────────────────────────────────────────────────────────────────
-    function randomBytes(n) {
-      return crypto.getRandomValues(new Uint8Array(n));
-    }
     function b64url(buf) {
       return btoa(String.fromCharCode(...buf))
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
     }
     async function generatePkce() {
-      const verifier = b64url(randomBytes(32));
+      const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
       const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-      const challenge = b64url(new Uint8Array(hash));
-      return { verifier, challenge };
+      return { verifier, challenge: b64url(new Uint8Array(hash)) };
     }
-
-    // ── JWT decode ────────────────────────────────────────────────────────────
     function decodeJwtPayload(token) {
       const part = token.split('.')[1];
       const padded = part + '='.repeat((4 - part.length % 4) % 4);
       return JSON.parse(atob(padded.replace(/-/g, '+').replace(/_/g, '/')));
     }
 
-    // ── profiles store (in-memory, persisted to download) ────────────────────
-    let profiles = { version: 1, profiles: {}, lastGood: {}, usageStats: {} };
-
-    function addProfile(tokens) {
-      const payload = decodeJwtPayload(tokens.access_token);
-      const email   = payload['https://api.openai.com/profile']?.email;
-      const acctId  = payload['https://api.openai.com/auth']?.chatgpt_account_id;
-      const key     = `openai-codex:${email}`;
-      const expires = Date.now() + tokens.expires_in * 1000;
-
-      profiles.profiles[key] = {
-        type: 'oauth', provider: 'openai-codex',
-        access: tokens.access_token, refresh: tokens.refresh_token, expires,
-      };
-      if (!profiles.lastGood['openai-codex']) profiles.lastGood['openai-codex'] = key;
-      profiles.usageStats[key] = profiles.usageStats[key] ?? { lastUsed: 0, errorCount: 0 };
-
-      return { email, acctId, key };
-    }
-
-    // ── OAuth flow ────────────────────────────────────────────────────────────
-    async function startLogin() {
+    $('btn-login').addEventListener('click', async () => {
       const { verifier, challenge } = await generatePkce();
-      const state = b64url(randomBytes(16));
-      sessionStorage.setItem('pkce_verifier', verifier);
-      sessionStorage.setItem('oauth_state', state);
+      pkceVerifier = verifier;
+      oauthState = b64url(crypto.getRandomValues(new Uint8Array(16)));
 
       const params = new URLSearchParams({
         response_type: 'code', client_id: CLIENT_ID,
         redirect_uri: REDIRECT_URI, scope: SCOPE,
         code_challenge: challenge, code_challenge_method: 'S256',
-        state, id_token_add_organizations: 'true',
+        state: oauthState, id_token_add_organizations: 'true',
         codex_cli_simplified_flow: 'true', originator: 'pi',
       });
-      location.href = `${AUTHORIZE_URL}?${params}`;
-    }
+      window.open(`${AUTHORIZE_URL}?${params}`, '_blank');
+      $('step2').hidden = false;
+    });
 
-    async function handleCallback(code, returnedState) {
-      const state    = sessionStorage.getItem('oauth_state');
-      const verifier = sessionStorage.getItem('pkce_verifier');
-      sessionStorage.removeItem('pkce_verifier');
-      sessionStorage.removeItem('oauth_state');
-
-      if (returnedState && returnedState !== state) {
-        $('status').textContent = '❌ State mismatch — possible CSRF.';
-        return;
+    $('btn-exchange').addEventListener('click', async () => {
+      const input = $('callback-input').value.trim();
+      let code, returnedState;
+      try {
+        const url = new URL(input);
+        code = url.searchParams.get('code');
+        returnedState = url.searchParams.get('state');
+      } catch {
+        code = input;
+      }
+      if (!code) { $('status').textContent = '❌ No code found.'; return; }
+      if (returnedState && returnedState !== oauthState) {
+        $('status').textContent = '❌ State mismatch.'; return;
       }
 
       $('status').textContent = '⏳ Exchanging code for tokens…';
@@ -106,44 +97,48 @@
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
             grant_type: 'authorization_code', client_id: CLIENT_ID,
-            code, code_verifier: verifier, redirect_uri: REDIRECT_URI,
+            code, code_verifier: pkceVerifier, redirect_uri: REDIRECT_URI,
           }),
         });
         if (!resp.ok) throw new Error(await resp.text());
         const tokens = await resp.json();
-        const { email, acctId, key } = addProfile(tokens);
+
+        const payload = decodeJwtPayload(tokens.access_token);
+        const email  = payload['https://api.openai.com/profile']?.email;
+        const acctId = payload['https://api.openai.com/auth']?.chatgpt_account_id;
+        const key    = `openai-codex:${email}`;
+
+        profiles.profiles[key] = {
+          type: 'oauth', provider: 'openai-codex',
+          access: tokens.access_token, refresh: tokens.refresh_token,
+          expires: Date.now() + tokens.expires_in * 1000,
+        };
+        if (!profiles.lastGood['openai-codex']) profiles.lastGood['openai-codex'] = key;
+        profiles.usageStats[key] ??= { lastUsed: 0, errorCount: 0 };
 
         $('status').textContent = `✓ ${email} (${acctId})`;
         $('output').textContent = JSON.stringify(profiles, null, 2);
         $('output').hidden = false;
-        $('btn-download').hidden = false;
-        $('btn-add').hidden = false;
-
-        // clean URL
-        history.replaceState({}, '', location.pathname);
+        $('step2').hidden = true;
+        $('step3').hidden = false;
+        $('callback-input').value = '';
       } catch (e) {
         $('status').textContent = `❌ ${e.message}`;
       }
-    }
+    });
 
-    function download() {
+    $('btn-download').addEventListener('click', () => {
       const blob = new Blob([JSON.stringify(profiles, null, 2)], { type: 'application/json' });
-      const a = Object.assign(document.createElement('a'), {
+      Object.assign(document.createElement('a'), {
         href: URL.createObjectURL(blob), download: 'auth-profiles.json',
-      });
-      a.click();
-    }
+      }).click();
+    });
 
-    // ── init ──────────────────────────────────────────────────────────────────
-    $('btn-login').addEventListener('click', startLogin);
-    $('btn-download').addEventListener('click', download);
-    $('btn-add').addEventListener('click', startLogin);
-
-    const params = new URLSearchParams(location.search);
-    if (params.has('code')) {
-      $('btn-login').hidden = true;
-      handleCallback(params.get('code'), params.get('state'));
-    }
+    $('btn-add').addEventListener('click', () => {
+      $('step3').hidden = true;
+      $('status').textContent = '';
+      $('btn-login').click();
+    });
   </script>
 </body>
 </html>
