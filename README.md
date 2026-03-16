@@ -24,8 +24,34 @@ No server required. All token exchange happens in the browser.
 
 ```bash
 cargo build --release
-./target/release/manytokens --openai
+./target/release/manytokens --openai [-o <output>]
+./target/release/manytokens --refresh [-o <path>]
+./target/release/manytokens --check  [-o <path>] [--warn 24h] [--warn 6h] [--warn 1h]
 ```
+
+### Authenticate (interactive)
+
+```bash
+manytokens --openai -o auth-profiles.json
+```
+
+Opens an OpenAI OAuth URL in your browser. Paste the callback URL back into the terminal. Repeat for multiple accounts.
+
+### Headless token refresh
+
+```bash
+manytokens --refresh -o auth-profiles.json
+```
+
+Non-interactively refreshes all tokens using existing refresh tokens. Suitable for cron/systemd timers.
+
+### Check expiry
+
+```bash
+manytokens --check -o auth-profiles.json --warn 24h --warn 6h --warn 1h
+```
+
+Prints expiry status for all profiles and warns when within specified thresholds.
 
 Example session:
 
@@ -43,11 +69,7 @@ Follow the prompts — open the URL, complete login in the browser, paste the ca
 
 ## Output
 
-Profiles are written to:
-
-```
-~/.openclaw/agents/main/agent/auth-profiles.json
-```
+Profiles are written to the path specified by `-o` (default: `./auth-profiles.json`).
 
 A `.bak` backup is created automatically before each save.
 
