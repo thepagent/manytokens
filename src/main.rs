@@ -242,7 +242,49 @@ fn save_profiles(profiles: &AuthProfiles, path: &std::path::Path) -> anyhow::Res
     Ok(())
 }
 
-// ── main ──────────────────────────────────────────────────────────────────────
+fn refresh_flow(output: &std::path::Path) -> anyhow::Result<()> {
+    let client = Client::new();
+    let mut profiles = load_profiles(output);
+    let mut updated = 0usize;
+
+    for (key, profile) in profiles.profiles.iter_mut() {
+        let Some(ref refresh_token) = profile.refresh.clone() else { continue };
+
+        eprint!("Refreshing {} … ", key);
+        let params = [
+            ("grant_type", "refresh_token"),
+            ("client_id", CLIENT_ID),
+            ("refresh_token", refresh_token.as_str()),
+        ];
+        let resp = client.post(TOKEN_URL).form(&params).send()?;
+        if !resp.status().is_success() {
+            eprintln!("FAILED: {}", resp.text().unwrap_or_default());
+            continue;
+        }
+        let tok: TokenResponse = resp.json()?;
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            + tok.expires_in * 1000;
+
+        profile.access  = Some(tok.access_token);
+        profile.refresh = Some(tok.refresh_token);
+        profile.expires = Some(expires);
+        eprintln!("OK (expires in {}s)", tok.expires_in);
+        updated += 1;
+    }
+
+    if updated > 0 {
+        save_profiles(&profiles, output)?;
+        println!("{} profile(s) refreshed.", updated);
+    } else {
+        println!("No profiles refreshed.");
+    }
+    Ok(())
+}
+
+
 
 fn openai_flow(output: &std::path::Path) -> anyhow::Result<()> {
     let client = Client::new();
@@ -297,6 +339,63 @@ fn openai_flow(output: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn parse_duration(s: &str) -> anyhow::Result<u64> {
+    if let Some(h) = s.strip_suffix('h') {
+        Ok(h.parse::<u64>()? * 3600)
+    } else if let Some(m) = s.strip_suffix('m') {
+        Ok(m.parse::<u64>()? * 60)
+    } else {
+        Ok(s.parse::<u64>()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration() {
+        assert_eq!(parse_duration("1h").unwrap(),  3600);
+        assert_eq!(parse_duration("24h").unwrap(), 86400);
+        assert_eq!(parse_duration("30m").unwrap(), 1800);
+        assert_eq!(parse_duration("3600").unwrap(), 3600);
+        assert!(parse_duration("bad").is_err());
+    }
+}
+
+fn check_flow(output: &std::path::Path, warn_secs: &[u64]) -> anyhow::Result<()> {
+    let profiles = load_profiles(output);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    for (key, profile) in &profiles.profiles {
+        let Some(expires_ms) = profile.expires else {
+            println!("{}: no expiry info", key);
+            continue;
+        };
+        if now_ms >= expires_ms {
+            println!("EXPIRED  {}", key);
+            println!("  → rerun: manytokens --openai -o {}", output.display());
+            continue;
+        }
+        let remaining_secs = (expires_ms - now_ms) / 1000;
+        let h = remaining_secs / 3600;
+        let m = (remaining_secs % 3600) / 60;
+        println!("OK       {} (expires in {}h{}m)", key, h, m);
+
+        for &threshold in warn_secs {
+            if remaining_secs <= threshold {
+                println!("  ⚠ WARNING: expires within {}h — rerun: manytokens --openai -o {}",
+                    threshold / 3600, output.display());
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let output = args.windows(2)
@@ -304,13 +403,34 @@ fn main() {
         .map(|w| std::path::PathBuf::from(&w[1]))
         .unwrap_or_else(|| std::path::PathBuf::from("auth-profiles.json"));
 
+    // collect --warn values
+    let warn_secs: Vec<u64> = args.windows(2)
+        .filter(|w| w[0] == "--warn")
+        .filter_map(|w| parse_duration(&w[1]).ok())
+        .collect();
+
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("Usage: manytokens --openai [-o <output>]");
+        println!("       manytokens --refresh [-o <path>]");
+        println!("       manytokens --check [-o <path>] [--warn 24h] [--warn 6h] [--warn 1h]");
         println!();
         println!("Options:");
         println!("  --openai        Authenticate via OpenAI OAuth (PKCE)");
-        println!("  -o <path>       Output path for auth-profiles.json [default: ./auth-profiles.json]");
+        println!("  --refresh       Headless token refresh using existing refresh tokens");
+        println!("  --check         Check token expiry status");
+        println!("  --warn <dur>    Warn if expiry is within duration (e.g. 24h, 6h, 1h)");
+        println!("  -o <path>       Path to auth-profiles.json [default: ./auth-profiles.json]");
         println!("  -h, --help      Show this help message");
+    } else if args.iter().any(|a| a == "--check") {
+        if let Err(e) = check_flow(&output, &warn_secs) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    } else if args.iter().any(|a| a == "--refresh") {
+        if let Err(e) = refresh_flow(&output) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
     } else if args.iter().any(|a| a == "--openai") {
         if let Err(e) = openai_flow(&output) {
             eprintln!("Error: {}", e);
@@ -318,6 +438,8 @@ fn main() {
         }
     } else {
         eprintln!("Usage: manytokens --openai [-o <output>]");
+        eprintln!("       manytokens --refresh [-o <path>]");
+        eprintln!("       manytokens --check [-o <path>] [--warn 24h]");
         eprintln!("Run with --help for more information.");
         std::process::exit(1);
     }
