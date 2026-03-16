@@ -242,7 +242,49 @@ fn save_profiles(profiles: &AuthProfiles, path: &std::path::Path) -> anyhow::Res
     Ok(())
 }
 
-// ── main ──────────────────────────────────────────────────────────────────────
+fn refresh_flow(output: &std::path::Path) -> anyhow::Result<()> {
+    let client = Client::new();
+    let mut profiles = load_profiles(output);
+    let mut updated = 0usize;
+
+    for (key, profile) in profiles.profiles.iter_mut() {
+        let Some(ref refresh_token) = profile.refresh.clone() else { continue };
+
+        eprint!("Refreshing {} … ", key);
+        let params = [
+            ("grant_type", "refresh_token"),
+            ("client_id", CLIENT_ID),
+            ("refresh_token", refresh_token.as_str()),
+        ];
+        let resp = client.post(TOKEN_URL).form(&params).send()?;
+        if !resp.status().is_success() {
+            eprintln!("FAILED: {}", resp.text().unwrap_or_default());
+            continue;
+        }
+        let tok: TokenResponse = resp.json()?;
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            + tok.expires_in * 1000;
+
+        profile.access  = Some(tok.access_token);
+        profile.refresh = Some(tok.refresh_token);
+        profile.expires = Some(expires);
+        eprintln!("OK (expires in {}s)", tok.expires_in);
+        updated += 1;
+    }
+
+    if updated > 0 {
+        save_profiles(&profiles, output)?;
+        println!("{} profile(s) refreshed.", updated);
+    } else {
+        println!("No profiles refreshed.");
+    }
+    Ok(())
+}
+
+
 
 fn openai_flow(output: &std::path::Path) -> anyhow::Result<()> {
     let client = Client::new();
@@ -306,11 +348,18 @@ fn main() {
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("Usage: manytokens --openai [-o <output>]");
+        println!("       manytokens --refresh [-o <input/output>]");
         println!();
         println!("Options:");
         println!("  --openai        Authenticate via OpenAI OAuth (PKCE)");
-        println!("  -o <path>       Output path for auth-profiles.json [default: ./auth-profiles.json]");
+        println!("  --refresh       Headless token refresh using existing refresh tokens");
+        println!("  -o <path>       Path to auth-profiles.json [default: ./auth-profiles.json]");
         println!("  -h, --help      Show this help message");
+    } else if args.iter().any(|a| a == "--refresh") {
+        if let Err(e) = refresh_flow(&output) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
     } else if args.iter().any(|a| a == "--openai") {
         if let Err(e) = openai_flow(&output) {
             eprintln!("Error: {}", e);
@@ -318,6 +367,7 @@ fn main() {
         }
     } else {
         eprintln!("Usage: manytokens --openai [-o <output>]");
+        eprintln!("       manytokens --refresh [-o <path>]");
         eprintln!("Run with --help for more information.");
         std::process::exit(1);
     }
