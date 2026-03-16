@@ -349,6 +349,20 @@ fn parse_duration(s: &str) -> anyhow::Result<u64> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration() {
+        assert_eq!(parse_duration("1h").unwrap(),  3600);
+        assert_eq!(parse_duration("24h").unwrap(), 86400);
+        assert_eq!(parse_duration("30m").unwrap(), 1800);
+        assert_eq!(parse_duration("3600").unwrap(), 3600);
+        assert!(parse_duration("bad").is_err());
+    }
+}
+
 fn check_flow(output: &std::path::Path, warn_secs: &[u64]) -> anyhow::Result<()> {
     let profiles = load_profiles(output);
     let now_ms = std::time::SystemTime::now()
