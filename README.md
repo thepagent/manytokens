@@ -9,7 +9,18 @@ A CLI tool to authenticate multiple OpenAI accounts via OAuth (PKCE flow) and st
 3. It exchanges the code for access/refresh tokens, extracts your email and account ID from the JWT, and writes a profile entry to `auth-profiles.json`.
 4. Repeat for as many accounts as you need.
 
-## Usage
+## Web UI
+
+A pure client-side version is available at **https://thepagent.github.io/manytokens/**
+
+1. Click "Open OpenAI Login" — a new tab opens the OAuth page
+2. Complete login; the browser redirects to `localhost:1455/auth/callback?code=...`
+3. Copy the full URL from the address bar and paste it back into the page
+4. Click "Exchange Token" — download `auth-profiles.json`
+
+No server required. All token exchange happens in the browser.
+
+## CLI Usage
 
 ```bash
 cargo build --release
